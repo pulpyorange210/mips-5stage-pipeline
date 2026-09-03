@@ -14,13 +14,18 @@ This started as a university assignment. It is being turned into a portfolio art
 
 | Tool | Version | Purpose |
 |---|---|---|
-| `iverilog` | ≥ 12.0 | Simulation (4-state, models `X`/`Z`) |
+| `iverilog` | ≥ 11.0 | Simulation (4-state, models `X`/`Z`) |
 | `verilator` | ≥ 5.0 | **Lint only** — `--lint-only`. Do not build a C++ sim harness |
 | `gtkwave` | ≥ 3.3 | VCD viewing (manual, not in CI) |
 | `make` | any | All entry points |
 | `yosys` | ≥ 0.36 | Optional gate count for the README |
 
 Install: `sudo apt install -y iverilog verilator gtkwave make git yosys`
+
+Everything runs in WSL Ubuntu 22.04. Its `iverilog` is 11.0, which is what apt carries on
+jammy and is fine here: the RTL is compiled `-g2005`, and nothing in the test suite depends
+on a 12.x feature. Do not spend time building 12.x from source.
+
 Never introduce a tool outside this list without asking. No commercial EDA, no cocotb, no Python dependencies.
 
 ## Commands
@@ -97,7 +102,10 @@ assign rs_data = (rs_addr == 5'd0)                      ? 32'd0 :
 
 **3. Hazard unit stalls spuriously.** It fires whenever `id_ex_rt` matches, ignoring whether the consumer actually reads that register. Add a per-opcode read mask (`lw` and `ori` read rs only; `sw` and `xor` read both; `j` reads neither) and guard on `id_ex_rt != 0`.
 
-**4. Dead nets.** Remove `alu_zero`, `ex_mem_mem_read`, `id_ex_pc_plus4` — Verilator flags these as unused.
+**4. Dead nets.** Remove `alu_zero` and `id_ex_pc_plus4` — Verilator flags these two as unused.
+
+Do **not** remove `ex_mem_mem_read`. An earlier draft of this list had it, wrongly. It drives
+`dmem.mem_read`, and the testbench's read/write invariant reads it; Verilator does not flag it.
 
 **5. Instruction memory uses `initial`, not reset.** The assignment specified reset-time initialisation. Note the deviation in the README; changing it is optional.
 
