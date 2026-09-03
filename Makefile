@@ -19,7 +19,12 @@ VVP         := vvp
 VERILATOR   := verilator
 WAVE_VIEWER ?= gtkwave
 
-IVFLAGS  := -g2005 -Wall -s tb_processor
+IVFLAGS_BASE := -g2005 -Wall -I$(TB_DIR)
+IVFLAGS      := $(IVFLAGS_BASE) -s tb_processor
+
+SELFTEST_SRC := $(TB_DIR)/tb_invariants_selftest.v
+SELFTEST_BIN := $(BUILD)/invariants_selftest.vvp
+INVARIANTS   := $(TB_DIR)/invariants.vh
 
 # Lint policy: no blanket -Wno- suppressions. Anything Verilator flags is
 # either fixed in the RTL or silenced by a targeted lint_off pragma at the
@@ -41,7 +46,7 @@ WAVE_PROGRAM ?= raw_dist3
 
 SIMS := $(patsubst %,$(BUILD)/%.vvp,$(PROGRAMS))
 
-.PHONY: all lint test wave clean
+.PHONY: all lint test selftest check wave clean
 
 all: test
 
@@ -51,7 +56,7 @@ $(BUILD):
 # One simulation binary per test program. The program path, its id and its
 # cycle budget are baked in at compile time so the testbench needs no runtime
 # plusargs and each binary is self-contained.
-$(BUILD)/%.vvp: $(PROG_DIR)/%.hex $(RTL) $(TB) | $(BUILD)
+$(BUILD)/%.vvp: $(PROG_DIR)/%.hex $(RTL) $(TB) $(INVARIANTS) | $(BUILD)
 	$(IVERILOG) $(IVFLAGS) \
 	  -DPROGRAM='"$(PROG_DIR)/$*.hex"' \
 	  -DVCDFILE='"$(BUILD)/$*.vcd"' \
@@ -86,6 +91,26 @@ test: $(SIMS)
 	  echo "one or more tests FAILED"; \
 	fi; \
 	exit $$rc
+
+# Verifies the testbench, not the processor: it corrupts the state each
+# invariant polices and asserts the invariant fires. Deliberately kept out of
+# `make test`, which is about the DUT. `make check` runs both.
+$(SELFTEST_BIN): $(RTL) $(SELFTEST_SRC) $(INVARIANTS) | $(BUILD)
+	$(IVERILOG) $(IVFLAGS_BASE) -s tb_invariants_selftest \
+	  -DVCDFILE='"$(BUILD)/invariants_selftest.vcd"' \
+	  -o $@ $(RTL) $(SELFTEST_SRC)
+
+selftest: $(SELFTEST_BIN)
+	@log=$(BUILD)/invariants_selftest.log; \
+	$(VVP) $(SELFTEST_BIN) | tee $$log; \
+	if grep -q "TEST PASSED" $$log; then \
+	  echo "PASS: invariants selftest"; \
+	else \
+	  echo "FAIL: invariants selftest"; \
+	  exit 1; \
+	fi
+
+check: lint selftest test
 
 wave: $(BUILD)/$(WAVE_PROGRAM).vvp
 	$(VVP) $(BUILD)/$(WAVE_PROGRAM).vvp

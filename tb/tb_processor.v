@@ -69,6 +69,7 @@ module tb_processor;
     end
 
     initial begin
+        $timeformat(-9, 0, " ns", 10);
         $dumpfile(`VCDFILE);
         $dumpvars(0, tb_processor);
     end
@@ -134,60 +135,18 @@ module tb_processor;
     endtask
 
     // ------------------------------------------------------------------
-    // Continuous invariants
+    // Continuous invariants.
     //
-    // Checked on negedge rather than posedge: at a posedge the testbench runs
-    // in the active region, before the RTL's non-blocking updates land, so it
-    // would sample stale state. Mid-cycle everything has settled.
+    // The checks themselves live in tb/invariants.vh, shared with
+    // tb_invariants_selftest.v so that the selftest proves this exact code
+    // fires rather than a duplicate of it.
     //
-    // Every comparison uses === / !== . The == and != operators return X when
-    // either side contains X, and an if treats X as false -- which would
-    // silently pass on exactly the uninitialised-signal bug these are here to
-    // catch.
+    // check_invariants is called on negedge, not posedge: at a posedge the
+    // testbench runs in the active region, before the RTL's non-blocking
+    // updates land, so it would sample stale state. Mid-cycle everything has
+    // settled.
     // ------------------------------------------------------------------
-    task fail_invariant;
-        input [511:0] name;
-        input [511:0] detail;
-        begin
-            $display("INVARIANT VIOLATED at %0t (cycle %0d): %0s -- %0s",
-                     $time, cycle, name, detail);
-            errors = errors + 1;
-        end
-    endtask
-
-    task check_invariants;
-        begin
-            // Architectural: r0 is hardwired zero.
-            if (dut.regfile.registers[0] !== 32'd0) begin
-                fail_invariant("r0_is_zero", "registers[0] is not 32'd0");
-                $display("           registers[0] = %h", dut.regfile.registers[0]);
-            end
-
-            // The r0 bypass must hold on the read port too, not just in storage.
-            if (dut.if_id_rs === 5'd0 && dut.rs_data_id !== 32'd0) begin
-                fail_invariant("r0_read_port", "if_id_rs is r0 but rs_data_id is non-zero");
-                $display("           rs_data_id = %h", dut.rs_data_id);
-            end
-
-            // Control: data memory can never be read and written in one cycle.
-            if (dut.ex_mem_mem_read === 1'b1 && dut.ex_mem_mem_write === 1'b1) begin
-                fail_invariant("dmem_no_rw_same_cycle", "ex_mem_mem_read and ex_mem_mem_write both high");
-            end
-
-            // Alignment: the PC is always word-aligned.
-            if (dut.pc[1:0] !== 2'b00) begin
-                fail_invariant("pc_word_aligned", "pc[1:0] is not 2'b00");
-                $display("           pc = %h", dut.pc);
-            end
-
-            // No unknowns on the PC or the control signals once reset is gone.
-            if (^{dut.pc, dut.ctrl_reg_write, dut.ctrl_mem_write} === 1'bx) begin
-                fail_invariant("no_x_on_control", "X or Z on pc / ctrl_reg_write / ctrl_mem_write");
-                $display("           pc = %h  ctrl_reg_write = %b  ctrl_mem_write = %b",
-                         dut.pc, dut.ctrl_reg_write, dut.ctrl_mem_write);
-            end
-        end
-    endtask
+    `include "invariants.vh"
 
     // ------------------------------------------------------------------
     // Per-program end-state expectations, hardcoded.
