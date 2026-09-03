@@ -1,5 +1,10 @@
 module instruction_memory (
+    // instr = rom[pc[7:2]]: pc[1:0] are always 00 because every PC update is
+    // pc+4 or a word-aligned jump target (a testbench invariant asserts this),
+    // and pc[31:8] is beyond this 64-word ROM.
+    /* verilator lint_off UNUSEDSIGNAL */
     input  wire [31:0] pc,
+    /* verilator lint_on UNUSEDSIGNAL */
     output wire [31:0] instr
 );
     reg [31:0] rom [0:63];

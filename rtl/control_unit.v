@@ -52,6 +52,13 @@ module control_unit (
                     ALUOp    = 2'b11;
                 end
             end
+
+            // Every unimplemented opcode decodes to the defaults above, which
+            // are an architectural no-op: no register write, no memory access,
+            // no jump. Stating that explicitly rather than leaving the case
+            // incomplete, so the intent is in the source and not just in the
+            // reader's head.
+            default: ;
         endcase
     end
 
