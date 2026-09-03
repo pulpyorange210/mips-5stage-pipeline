@@ -40,6 +40,7 @@ module processor (
     wire        ctrl_reg_dst, ctrl_alu_src, ctrl_mem_to_reg;
     wire        ctrl_reg_write, ctrl_mem_read, ctrl_mem_write;
     wire [1:0]  ctrl_alu_op;
+    wire        ctrl_reads_rs, ctrl_reads_rt;
     wire        ctrl_jump;
 
     // Jump target address: { PC+4[31:28], instr[25:0], 2'b00 }
@@ -149,7 +150,9 @@ module processor (
         .MemRead  (ctrl_mem_read),
         .MemWrite (ctrl_mem_write),
         .ALUOp    (ctrl_alu_op),
-        .Jump     (ctrl_jump)
+        .Jump     (ctrl_jump),
+        .ReadsRs  (ctrl_reads_rs),
+        .ReadsRt  (ctrl_reads_rt)
     );
 
     // Hazard Detection Unit
@@ -158,6 +161,8 @@ module processor (
         .id_ex_rt       (id_ex_rt_addr),
         .if_id_rs       (if_id_rs),
         .if_id_rt       (if_id_rt),
+        .if_id_reads_rs (ctrl_reads_rs),
+        .if_id_reads_rt (ctrl_reads_rt),
         .pc_write       (pc_write),
         .if_id_write    (if_id_write),
         .id_ex_flush    (id_ex_flush)
