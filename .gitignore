@@ -4,3 +4,6 @@
 *.out
 Claude Setup.exe
 build/
+
+# Local working instructions, not part of the published project
+CLAUDE.md
