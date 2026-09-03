@@ -35,18 +35,27 @@ R-type. Every signal is default-assigned at the top of the `always @(*)` block,
 so unimplemented opcodes decode to an architectural no-op; `default: ;` states
 that explicitly rather than leaving the case incomplete.
 
-| Instruction | opcode | funct | RegDst | ALUSrc | MemToReg | RegWrite | MemRead | MemWrite | ALUOp | Jump |
-|---|---|---|---|---|---|---|---|---|---|---|
-| `lw`  | `100011` | –        | 0 | 1 | 1 | 1 | 1 | 0 | `00` | 0 |
-| `sw`  | `101011` | –        | 0 | 1 | 0 | 0 | 0 | 1 | `00` | 0 |
-| `j`   | `000010` | –        | 0 | 0 | 0 | 0 | 0 | 0 | `00` | 1 |
-| `ori` | `001101` | –        | 0 | 1 | 0 | 1 | 0 | 0 | `10` | 0 |
-| `xor` | `000000` | `100110` | 1 | 0 | 0 | 1 | 0 | 0 | `11` | 0 |
-| other | –        | –        | 0 | 0 | 0 | 0 | 0 | 0 | `00` | 0 |
+| Instruction | opcode | funct | RegDst | ALUSrc | ExtOp | MemToReg | RegWrite | MemRead | MemWrite | ALUOp | Jump |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `lw`  | `100011` | –        | 0 | 1 | 1 | 1 | 1 | 1 | 0 | `00` | 0 |
+| `sw`  | `101011` | –        | 0 | 1 | 1 | 0 | 0 | 0 | 1 | `00` | 0 |
+| `j`   | `000010` | –        | 0 | 0 | – | 0 | 0 | 0 | 0 | `00` | 1 |
+| `ori` | `001101` | –        | 0 | 1 | **0** | 0 | 1 | 0 | 0 | `10` | 0 |
+| `xor` | `000000` | `100110` | 1 | 0 | – | 0 | 1 | 0 | 0 | `11` | 0 |
+| other | –        | –        | 0 | 0 | 0 | 0 | 0 | 0 | 0 | `00` | 0 |
 
 `ALUOp` reaches the ALU unencoded: `00` add, `10` or, `11` xor, anything else 0.
 There is no separate ALU control unit; with five instructions the control unit
 emits the operation directly.
+
+`ExtOp` widens the 16-bit immediate: 1 sign-extends, 0 zero-extends. It is
+marked – where `ALUSrc` is 0 and the immediate never reaches the ALU. MIPS
+decides this by opcode class rather than by instruction format — the logical
+immediates zero-extend, the arithmetic and memory ones sign-extend — and `lw`,
+`sw` and `ori` are all I-type, so nothing in the encoding distinguishes them.
+That is why it has to be decoded rather than derived. `sign_extend` remains a
+pure sign-extender and the zero-extended alternative is formed in the datapath;
+`ExtOp` selects between them before ID/EX.
 
 `RegDst` picks the write-back register: 0 selects `rt` (the I-type
 destination, `lw` and `ori`), 1 selects `rd` (`xor`).
@@ -219,7 +228,14 @@ carries a targeted `lint_off UNUSEDSIGNAL` saying so.
   assignment specified reset-time initialisation. Left as-is; the testbench
   overwrites the ROM by hierarchical reference before the first fetch, so the
   test programs are unaffected.
-- **`ori` sign-extends its immediate.** `ALUSrc` routes it through
-  `sign_extend`, but MIPS `ori` zero-extends. `ori rX, r0, 0x8000` would yield
-  `0xFFFF8000`. Every test program keeps its immediates below `0x8000` so this
-  cannot mask a hazard under test. Pending.
+### A note on what `lw`/`sw` cannot test
+
+The memory address path cannot distinguish the two extensions, so no load or
+store offset can ever serve as evidence for `ExtOp`. `data_memory` indexes on
+`addr[7:0]`, and sign- and zero-extension agree on the low sixteen bits by
+construction — they differ only in bits [31:16]. Any offset therefore produces
+an identical byte address either way.
+
+Evidence has to come through the ALU result of a logical immediate, which is
+what `ori_zeroext.hex` uses, and its immediate must have bit 15 set or the two
+extensions coincide and the test silently stops testing anything.

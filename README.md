@@ -31,14 +31,14 @@ cd mips-5stage-pipeline
 make check
 ```
 
-`make check` runs lint, the invariant selftest and all seven test programs, and is
+`make check` runs lint, the invariant selftest and all eight test programs, and is
 the whole story — a clean clone reproduces the green CI run from that one
 command.
 
 | Target | What it does |
 |---|---|
 | `make lint` | `verilator --lint-only -Wall -Wno-DECLFILENAME`. Exits 0 with no warnings. |
-| `make test` | Builds and runs all seven programs, greps each log for `TEST PASSED`. |
+| `make test` | Builds and runs all eight programs, greps each log for `TEST PASSED`. |
 | `make selftest` | Proves each continuous invariant actually fires. Excluded from `make test`. |
 | `make check` | `lint` + `selftest` + `test`. |
 | `make wave` | Runs one program and opens its VCD. `WAVE_VIEWER` and `WAVE_PROGRAM` are overridable. |
@@ -78,23 +78,29 @@ decodes to an architectural no-op.
 |---|---|---|---|---|
 | `lw rt, off(rs)`  | I | `100011` | – | `rt <- MEM[rs + sext(off)]` |
 | `sw rt, off(rs)`  | I | `101011` | – | `MEM[rs + sext(off)] <- rt` |
-| `ori rt, rs, imm` | I | `001101` | – | `rt <- rs \| imm` |
+| `ori rt, rs, imm` | I | `001101` | – | `rt <- rs \| zext(imm)` |
 | `xor rd, rs, rt`  | R | `000000` | `100110` | `rd <- rs ^ rt` |
 | `j target`        | J | `000010` | – | `PC <- {PC+4[31:28], target, 2'b00}` |
 
 ### Control signals
 
-| Instruction | RegDst | ALUSrc | MemToReg | RegWrite | MemRead | MemWrite | ALUOp | Jump |
-|---|---|---|---|---|---|---|---|---|
-| `lw`  | 0 | 1 | 1 | 1 | 1 | 0 | `00` | 0 |
-| `sw`  | 0 | 1 | 0 | 0 | 0 | 1 | `00` | 0 |
-| `j`   | 0 | 0 | 0 | 0 | 0 | 0 | `00` | 1 |
-| `ori` | 0 | 1 | 0 | 1 | 0 | 0 | `10` | 0 |
-| `xor` | 1 | 0 | 0 | 1 | 0 | 0 | `11` | 0 |
-| other | 0 | 0 | 0 | 0 | 0 | 0 | `00` | 0 |
+| Instruction | RegDst | ALUSrc | ExtOp | MemToReg | RegWrite | MemRead | MemWrite | ALUOp | Jump |
+|---|---|---|---|---|---|---|---|---|---|
+| `lw`  | 0 | 1 | 1 | 1 | 1 | 1 | 0 | `00` | 0 |
+| `sw`  | 0 | 1 | 1 | 0 | 0 | 0 | 1 | `00` | 0 |
+| `j`   | 0 | 0 | – | 0 | 0 | 0 | 0 | `00` | 1 |
+| `ori` | 0 | 1 | **0** | 0 | 1 | 0 | 0 | `10` | 0 |
+| `xor` | 1 | 0 | – | 0 | 1 | 0 | 0 | `11` | 0 |
+| other | 0 | 0 | 0 | 0 | 0 | 0 | 0 | `00` | 0 |
 
 `ALUOp` reaches the ALU unencoded: `00` add, `10` or, `11` xor. There is no
 separate ALU control unit — see [Known limitations](#known-limitations).
+
+`ExtOp` widens the 16-bit immediate: 1 sign-extends, 0 zero-extends, and is
+marked – where `ALUSrc` is 0 and the immediate never reaches the ALU. MIPS
+decides this by opcode class, not by format: `lw`, `sw` and `ori` are all
+I-type, so nothing in the encoding distinguishes them and it has to be decoded.
+See [the `ori` bug](#5-ori-sign-extended-its-immediate-c83eb3e).
 
 **[docs/design.md](docs/design.md) has the datapath diagram and the full
 derivations** for forwarding, the interlock, jump/flush and write-first. They
@@ -113,7 +119,7 @@ The only command-line suppression is `DECLFILENAME`, because the pipeline
 registers are named `IF_ID`/`ID_EX`/`EX_MEM`/`MEM_WB` in lowercase files.
 
 **2. Self-checking test programs**, one per hazard class, in `tb/programs/`.
-One testbench serves all seven, parameterised at compile time over the hex path
+One testbench serves all eight, parameterised at compile time over the hex path
 and a program id selecting a block of hardcoded expected values.
 
 | Program | Proves |
@@ -125,6 +131,7 @@ and a program id selecting a block of hardcoded expected values.
 | `r0_write.hex` | Writes to `r0` discarded on all three paths |
 | `jump_flush.hex` | The instruction after `j` is squashed |
 | `false_stall.hex` | The interlock does **not** fire when there is no dependency |
+| `ori_zeroext.hex` | `ori` zero-extends its immediate |
 
 Each has a positive control proving it ran, so a zero in the evidence register
 cannot be confused with a program that never executed, and an independent
@@ -154,7 +161,7 @@ live code rather than a copy.
 
 ### Mutation testing
 
-Seven passing tests say nothing about coverage. To find out whether the suite
+Eight passing tests say nothing about coverage. To find out whether the suite
 actually detects anything, each mechanism was broken in a scratch tree:
 
 ```
@@ -167,6 +174,7 @@ write-first bypass removed     caught by: raw_dist3
 IF/ID jump flush disabled      caught by: jump_flush
 read mask removed              caught by: false_stall
 id_ex_rt != 0 guard removed    caught by: false_stall
+ExtOp forced to sign-extend    caught by: ori_zeroext
 ```
 
 No mutation goes undetected, and each is caught by the test written for it.
@@ -351,14 +359,60 @@ with every other stall and flush count unchanged — `load_use` still stalls
 exactly once, `jump_flush` still flushes once, the other five still stall zero
 times. Both guards are independently mutation-covered.
 
-### Not yet fixed
+### 5. `ori` sign-extended its immediate (`c83eb3e`)
 
-One known bug is still open, and it is a bug rather than a design choice:
+Every immediate went through `sign_extend`, so `ori r7, r0, 0x8000` produced
+`0xFFFF8000` where MIPS specifies `0x00008000`. A wrong architectural result
+for a legal instruction — not a stall, not a timing cost, a wrong number in a
+register.
 
-- **`ori` sign-extends its immediate.** `ALUSrc` routes it through
-  `sign_extend`, but MIPS `ori` zero-extends. `ori rX, r0, 0x8000` yields
-  `0xFFFF8000`. Every test program keeps its immediates below `0x8000` so this
-  cannot mask a hazard under test.
+MIPS decides extension by **opcode class, not instruction format**. The logical
+immediates zero-extend; the arithmetic and memory ones sign-extend. `lw`, `sw`
+and `ori` are all I-type with a 16-bit immediate, so nothing in the encoding
+distinguishes them — which is exactly why `ExtOp` has to be a decoded control
+signal rather than something derived from the format bits.
+
+**Why the existing tests missed it.** Every earlier program kept its immediates
+below `0x8000`, which was deliberate — chosen so this bug could not contaminate
+the hazard tests — but it also meant nothing exercised it.
+
+**The subtlety that makes the test able to fail at all.** The two extensions
+differ *only* in bits [31:16], filled from a copy of bit 15. For any immediate
+with bit 15 clear they are bit-for-bit identical, so a test written with a
+convenient value like `0x0044` passes on broken RTL and proves nothing. The
+evidence immediate is `0x8000` — bit 15 set, everything else clear — and the
+header says so explicitly, because clearing that bit would not weaken the test,
+it would silently disable it while leaving a green tick behind.
+
+**Where the evidence had to come from.** Not a load or store offset. The memory
+path indexes on `addr[7:0]`, and the two extensions agree on the low sixteen
+bits by construction, so no `lw`/`sw` offset can ever tell them apart. Only the
+ALU result of a logical immediate can.
+
+**How it was caught.** `ori_zeroext.hex`, committed red at `48e914a`. The
+positive control does real work here: `r8` is an `ori` with bit 15 *clear*,
+deliberately insensitive to the bug, so it passes either way. The failing run
+shows `r7` and its memory witness wrong while `r8` and its witness are right —
+isolating the fault to the extension rather than `ori` generally, the ALU OR
+path, or a program that never ran.
+
+**The fix.** `ExtOp` decoded in `control_unit` alongside `ALUSrc` and `RegDst`,
+selecting between `sign_extend`'s output and a zero-extended immediate formed
+in the datapath. `sign_extend` keeps its interface and stays a pure
+sign-extender: a module called `sign_extend` that sometimes zero-extends is a
+worse thing to leave behind than one extra mux, and leaving it alone means
+`lw`/`sw` cannot be perturbed. The now-inaccurate `sign_ext_imm` signals
+through ID/EX were renamed `ext_imm` in the same commit, since a name that
+contradicts its value is precisely what misleads the next reader.
+
+**Proof:** red at `48e914a`, green at `c83eb3e`, with all eight programs passing
+and every stall and flush count unchanged. Mutation testing confirms reverting
+`ExtOp` to a hard sign-extend is caught by `ori_zeroext` and nothing else.
+
+### Still open
+
+None of the five known bugs remain. What is left are the design limitations
+below, which are properties of a deliberately small core rather than defects.
 
 ---
 
