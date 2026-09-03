@@ -163,6 +163,24 @@ dangling pin either way, `PINCONNECTEMPTY` for an empty connection and
 `PINMISSING` for an omitted one. Silencing that with a pragma would have kept
 the dead logic and hidden it, so the ports went instead.
 
+### `ex_mem_mem_read` is not dead — do not remove it
+
+The working notes this project was built from listed a third dead net,
+`ex_mem_mem_read`, alongside the two above. That was wrong, and it is recorded
+here because acting on it would have broken the design and, worse, the
+assertion meant to catch the breakage.
+
+`ex_mem_mem_read` drives `dmem.mem_read`, which gates the data memory's read
+path. It is also read by the testbench invariant asserting that data memory is
+never read and written in the same cycle — so deleting the net would have
+removed the signal *and* disarmed the check that would have noticed. Verilator
+does not flag it as unused, which is the giveaway: only `alu_zero` and
+`id_ex_pc_plus4` ever appeared in the `UNUSEDSIGNAL` output.
+
+The general lesson is worth more than the specific net. A hand-written list of
+dead code is a hypothesis, not a result. The linter is the authority on what is
+actually unreferenced, and the two nets it named are exactly the two that went.
+
 One consequence is worth recording. With ID/EX no longer consuming it, only
 `if_id_pc_plus4[31:28]` is read — by `jump_target`. That is the J-type rule: the
 target inherits the top 4 bits of PC+4 and takes the other 28 from the
