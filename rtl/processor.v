@@ -34,13 +34,16 @@ module processor (
 
     // ID STAGE WIRES
     wire [31:0] rs_data_id, rt_data_id;
-    wire [31:0] sign_ext_imm;
+    wire [31:0] sign_ext_imm;   // sign_extend output
+    wire [31:0] zero_ext_imm;   // the other half of the ExtOp mux
+    wire [31:0] ext_imm;        // whichever the opcode calls for
 
     // Control signals from control unit
     wire        ctrl_reg_dst, ctrl_alu_src, ctrl_mem_to_reg;
     wire        ctrl_reg_write, ctrl_mem_read, ctrl_mem_write;
     wire [1:0]  ctrl_alu_op;
     wire        ctrl_reads_rs, ctrl_reads_rt;
+    wire        ctrl_ext_op;
     wire        ctrl_jump;
 
     // Jump target address: { PC+4[31:28], instr[25:0], 2'b00 }
@@ -56,7 +59,7 @@ module processor (
     wire        id_ex_reg_dst, id_ex_alu_src, id_ex_mem_to_reg;
     wire        id_ex_reg_write, id_ex_mem_read, id_ex_mem_write;
     wire [1:0]  id_ex_alu_op;
-    wire [31:0] id_ex_rs_data, id_ex_rt_data, id_ex_sign_ext_imm;
+    wire [31:0] id_ex_rs_data, id_ex_rt_data, id_ex_ext_imm;
     wire [4:0]  id_ex_rs_addr, id_ex_rt_addr, id_ex_rd_addr;
 
     // EX STAGE WIRES
@@ -133,11 +136,24 @@ module processor (
         .rt_data    (rt_data_id)
     );
 
-    // Sign Extend
+    // Immediate extension.
+    //
+    // sign_extend keeps its original interface and stays a pure sign-extender:
+    // a module named sign_extend that sometimes zero-extends is a worse thing
+    // to leave behind than an extra mux, and leaving it untouched means lw and
+    // sw cannot be disturbed by this change.
+    //
+    // ExtOp selects: 1 sign-extends for the memory offsets, 0 zero-extends for
+    // ori's logical immediate. The distinction is not derivable from the
+    // instruction format -- lw, sw and ori are all I-type -- which is exactly
+    // why it has to be a decoded control signal.
     sign_extend se (
         .in  (if_id_imm),
         .out (sign_ext_imm)
     );
+
+    assign zero_ext_imm = {16'd0, if_id_imm};
+    assign ext_imm      = ctrl_ext_op ? sign_ext_imm : zero_ext_imm;
 
     // Control Unit
     control_unit ctrl (
@@ -152,7 +168,8 @@ module processor (
         .ALUOp    (ctrl_alu_op),
         .Jump     (ctrl_jump),
         .ReadsRs  (ctrl_reads_rs),
-        .ReadsRt  (ctrl_reads_rt)
+        .ReadsRt  (ctrl_reads_rt),
+        .ExtOp    (ctrl_ext_op)
     );
 
     // Hazard Detection Unit
@@ -185,7 +202,7 @@ module processor (
         // Data in
         .rs_data_in       (rs_data_id),
         .rt_data_in       (rt_data_id),
-        .sign_ext_imm_in  (sign_ext_imm),
+        .ext_imm_in       (ext_imm),
         .rs_addr_in       (if_id_rs),
         .rt_addr_in       (if_id_rt),
         .rd_addr_in       (if_id_rd),
@@ -200,7 +217,7 @@ module processor (
         // Data out
         .rs_data_out      (id_ex_rs_data),
         .rt_data_out      (id_ex_rt_data),
-        .sign_ext_imm_out (id_ex_sign_ext_imm),
+        .ext_imm_out      (id_ex_ext_imm),
         .rs_addr_out      (id_ex_rs_addr),
         .rt_addr_out      (id_ex_rt_addr),
         .rd_addr_out      (id_ex_rd_addr)
@@ -230,7 +247,7 @@ module processor (
                                                      id_ex_rt_data;
 
     // ALUSrc MUX: select between register value and sign-extended immediate
-    assign alu_input_b = id_ex_alu_src ? id_ex_sign_ext_imm : alu_input_b_pre;
+    assign alu_input_b = id_ex_alu_src ? id_ex_ext_imm : alu_input_b_pre;
 
     // ALU
     alu alu_inst (

@@ -18,7 +18,14 @@ module control_unit (
     // opcode list exists once: these are set by the same case arms that set
     // the datapath control, and cannot drift out of step with them.
     output reg        ReadsRs,
-    output reg        ReadsRt
+    output reg        ReadsRt,
+
+    // How to widen the 16-bit immediate to 32 bits: 1 sign-extends,
+    // 0 zero-extends. MIPS splits this by opcode class rather than by
+    // instruction format -- the logical immediates zero-extend, the arithmetic
+    // and memory ones sign-extend -- so it cannot be derived from the format
+    // bits and has to be decoded like any other control signal.
+    output reg        ExtOp
 );
 
     always @(*) begin
@@ -33,6 +40,7 @@ module control_unit (
         Jump     = 0;
         ReadsRs  = 0;
         ReadsRt  = 0;
+        ExtOp    = 0;
 
         case (opcode)
             6'b100011: begin // lw
@@ -41,6 +49,7 @@ module control_unit (
                 RegWrite = 1;
                 MemRead  = 1;
                 ReadsRs  = 1;   // base address; rt is the destination
+                ExtOp    = 1;   // byte offsets are signed
             end
 
             6'b101011: begin // sw
@@ -48,6 +57,7 @@ module control_unit (
                 MemWrite = 1;
                 ReadsRs  = 1;   // base address
                 ReadsRt  = 1;   // store data
+                ExtOp    = 1;   // byte offsets are signed
             end
 
             6'b000010: begin // j
@@ -61,6 +71,7 @@ module control_unit (
                 RegWrite = 1;
                 ALUOp    = 2'b10;
                 ReadsRs  = 1;   // rt is the destination
+                ExtOp    = 0;   // logical immediate: ZERO-extended, not signed
             end
 
             6'b000000: begin // R-type
