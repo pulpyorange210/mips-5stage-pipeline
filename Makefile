@@ -17,6 +17,7 @@ TB  := $(TB_DIR)/tb_processor.v
 IVERILOG    := iverilog
 VVP         := vvp
 VERILATOR   := verilator
+YOSYS       := yosys
 WAVE_VIEWER ?= gtkwave
 
 IVFLAGS_BASE := -g2005 -Wall -I$(TB_DIR)
@@ -59,7 +60,7 @@ WAVE_PROGRAM ?= raw_dist3
 
 SIMS := $(patsubst %,$(BUILD)/%.vvp,$(PROGRAMS))
 
-.PHONY: all lint test selftest check wave clean
+.PHONY: all lint test selftest check wave synth clean
 
 all: test
 
@@ -128,6 +129,22 @@ check: lint selftest test
 wave: $(BUILD)/$(WAVE_PROGRAM).vvp
 	$(VVP) $(BUILD)/$(WAVE_PROGRAM).vvp
 	$(WAVE_VIEWER) $(BUILD)/$(WAVE_PROGRAM).vcd
+
+# RTL-level cell count, per module. Not part of check, and not a gate count:
+# no target library is involved, so the number is only meaningful compared
+# against itself, which is what it is for -- sizing the effect of an RTL change.
+#
+# Deliberately no -top. Elaborating with -top processor reports zero cells, and
+# that is correct rather than broken: the top has only CLK and reset and no
+# outputs at all, so every cell in the design is unobservable and the optimiser
+# removes the lot. Without -top, each module keeps its ports and its logic
+# survives to be counted. The underlying limitation is real and is in the README.
+synth: | $(BUILD)
+	@$(YOSYS) -p "read_verilog $(RTL); proc; opt; stat" \
+	  > $(BUILD)/synth.log 2>&1 || { tail -20 $(BUILD)/synth.log; exit 1; }
+	@sed -n '/Printing statistics/,$$p' $(BUILD)/synth.log \
+	  | grep -E "^=== |Number of cells"
+	@echo "full log: $(BUILD)/synth.log"
 
 clean:
 	rm -rf $(BUILD)
