@@ -1,6 +1,6 @@
 module processor (
     input wire CLK,
-    input wire reset,
+    input wire reset
 );
 
     // IF STAGE WIRES

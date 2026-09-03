@@ -28,4 +28,4 @@ module data_memory (
             mem[addr[7:0]+8'd3]   <= write_data[7:0];
         end
     end
-Endmodule
+endmodule

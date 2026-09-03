@@ -23,4 +23,4 @@ module EX_MEM (
             rd_addr_out <= rd_addr_in;
         end
     end
-Endmodule
+endmodule
