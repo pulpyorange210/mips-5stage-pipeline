@@ -1,0 +1,50 @@
+// raw_dist3.hex
+//
+// HAZARD UNDER TEST
+//   Distance-3 RAW, i.e. register-file write-first forwarding.
+//   The producer at index 0 is in WB during exactly the cycle the consumer at
+//   index 3 is in ID:
+//
+//       cycle   1    2    3    4    5    6
+//       i0     IF   ID   EX  MEM   WB
+//       i1          IF   ID   EX  MEM   WB
+//       i2               IF   ID   EX  MEM
+//       i3 (consumer)    IF   ID   EX        <-- reads r5 in cycle 5
+//
+//   The forwarding unit cannot cover this. By the time the consumer reaches EX
+//   in cycle 6 the producer has already left MEM/WB, so ex_mem_rd and mem_wb_rd
+//   no longer match r5 and both forward selects stay 00. The only thing that
+//   can supply the right value is the register file itself, returning
+//   write_data on a read that collides with the write in progress.
+//
+//   Spacing is exact and nothing perturbs it: no lw means no load-use stall,
+//   and no j means no flush. The two NOPs are architectural NOPs -- opcode
+//   000000 with funct 000000 is an R-type that is not xor, so the control unit
+//   asserts nothing.
+//
+// EVIDENCE
+//   r6 is the register that carries the verdict. Nothing after index 3 writes
+//   r6, so the value it latches survives to the end of the run. dmem word 0
+//   corroborates it.
+//
+// EXPECTED FINAL STATE
+//   r5        = 0x000000AB
+//   r6        = 0x000000AB     <-- 0x00000000 on a core without write-first
+//   dmem[0:3] = 0x000000AB     <-- 0x00000000 on a core without write-first
+//
+// 0: ori r5, r0, 0x00AB     producer, writes r5 in WB during cycle 5
+340500AB
+// 1: nop
+00000000
+// 2: nop
+00000000
+// 3: ori r6, r5, 0x0000     consumer, reads r5 in ID during cycle 5
+34A60000
+// 4: sw  r6, 0(r0)          sink the observed value into dmem word 0
+AC060000
+// 5: nop
+00000000
+// 6: nop
+00000000
+// 7: nop
+00000000
