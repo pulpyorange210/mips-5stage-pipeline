@@ -55,7 +55,7 @@ CYCLES_raw_dist3  := 20
 CYCLES_load_use   := 20
 CYCLES_r0_write   := 20
 CYCLES_jump_flush  := 24
-CYCLES_false_stall := 24
+CYCLES_false_stall := 32
 
 # Which program `make wave` runs and opens.
 WAVE_PROGRAM ?= raw_dist3

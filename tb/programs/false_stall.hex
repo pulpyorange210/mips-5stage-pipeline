@@ -1,9 +1,8 @@
 // false_stall.hex
 //
 // HAZARD UNDER TEST
-//   The absence of a hazard. This program contains a lw immediately followed
-//   by an instruction that touches the loaded register but does NOT read it,
-//   so the interlock must not fire.
+//   The absence of a hazard, in the two shapes that fool a field-only
+//   comparison. Neither case must stall.
 //
 //   rs and rt are bit positions, instr[25:21] and instr[20:16]. Whether either
 //   is actually a source depends entirely on the opcode:
@@ -14,27 +13,35 @@
 //       xor   rs = source          rt = source
 //       j     neither -- those bits are part of the 26-bit target
 //
-//   The interlock condition compares id_ex_rt against both if_id_rs and
-//   if_id_rt without asking whether the consumer reads them. At index 5,
-//   ori r5, r0, 0x0077 has rt = r5 as its DESTINATION, which collides with the
-//   register the load at index 4 is writing. The comparison matches, and the
-//   pipeline stalls a cycle waiting for a value nobody is going to read.
+//   CASE 1 (index 5) -- rt is a destination, not a source.
+//   ori r5, r0, 0x0077 follows a load into r5. Its rt names r5 because that is
+//   where the result goes, not because it reads it. This is a WAW, which an
+//   in-order pipeline resolves for free since WB is sequential: the load
+//   writes r5, the ori overwrites it. Comparing fields without a read mask
+//   matches anyway and stalls a cycle waiting for a value nobody reads.
 //
-//   There is no data dependency here at all -- it is a WAW, and an in-order
-//   pipeline resolves that for free because WB is sequential. The load writes
-//   r5, then the ori overwrites it. Stalling changes nothing except the cost.
+//   CASE 2 (index 13) -- the load's destination is r0.
+//   ori r6, r0, 0x0033 follows lw r0, 0(r0). The ori genuinely reads rs, and
+//   rs genuinely is the load's destination register, so a read mask alone
+//   does not save this one -- both compare equal at 0. But a load into r0
+//   writes nothing, because the register file discards writes to r0, so there
+//   is no value to wait for. The id_ex_rt != 0 guard is what covers this.
 //
-// WHY END-STATE CHECKING CANNOT SEE THIS
+//   The two cases are independent: case 1 fails if the read mask is missing,
+//   case 2 fails if the zero guard is missing, and neither substitutes for
+//   the other.
+//
+// WHY END-STATE CHECKING CANNOT SEE EITHER
 //   A spurious stall is architecturally invisible. Every register and every
 //   memory word ends up exactly as it would without it -- a stall is
 //   conservative by construction, it only ever delays. Comparing final state
 //   against expected values, however carefully, cannot detect it. That is why
-//   the evidence for this test is the stall counter and not a register.
+//   the evidence here is the stall counter and not a register.
 //
 // EVIDENCE
 //   stalls == 0. The testbench counts cycles in which pc_write is low.
-//   This reads 1 before the read mask is added and 0 after; nothing else in
-//   the final state differs between the two.
+//   This reads 2 on the original hazard unit and 0 once both guards are in.
+//   Nothing else in the final state differs between the two.
 //
 // POSITIVE CONTROL
 //   r4 = 0x00000014, loaded at index 0 and never overwritten. Without it this
@@ -43,26 +50,31 @@
 //   r4 is the only thing proving a lw actually happened.
 //
 // INDEPENDENT WITNESS
-//   dmem word 4 = 0x00000077, the final r5 stored four instructions later so
-//   the read comes cleanly from the register file. dmem word 0 stays at its
-//   reset value 0x00000014, confirming neither load disturbed its source.
+//   dmem word 4 = 0x00000077 and dmem word 8 = 0x00000033, one per case,
+//   each stored four instructions after the value is produced so the read
+//   comes cleanly from the register file. dmem word 0 stays at its reset
+//   value 0x00000014, confirming no load disturbed its source.
 //
 // CYCLE COUNT
-//   16 cycles for the last instruction to retire, and zero stall cycles.
-//     12 instructions
+//   24 cycles for the last instruction to retire, and zero stall cycles.
+//     20 instructions
 //   +  4 cycles of pipeline fill
 //   +  0 stalls
-//   = 16
-//   Before the fix it takes 17: the one extra cycle is the bug, and it is the
-//   entire observable difference.
+//   = 24
+//   The original hazard unit takes 26: one wasted cycle per case, and those
+//   two cycles are the entire observable difference.
 //
 // EXPECTED FINAL STATE
+//   r0        = 0x00000000     lw r0 wrote nothing
 //   r4        = 0x00000014     positive control, a real load executed
-//   r5        = 0x00000077     ori wins the WAW; same before and after the fix
-//   dmem[4:7] = 0x00000077
+//   r5        = 0x00000077     ori won the WAW; same either way
+//   r6        = 0x00000033     r0 | 0x33
+//   dmem[4:7] = 0x00000077     case 1 witness
+//   dmem[8:11]= 0x00000033     case 2 witness
 //   dmem[0:3] = 0x00000014     untouched
-//   stalls    = 0              <-- 1 before the read mask. THE EVIDENCE.
+//   stalls    = 0              <-- 2 without the guards. THE EVIDENCE.
 //
+// --- case 1: rt is a destination -------------------------------------------
 // 0: lw  r4, 0(r0)          genuine load, r4 is never overwritten
 8C040000
 // 1: nop
@@ -82,9 +94,28 @@
 00000000
 // 8: nop
 00000000
-// 9: sw  r5, 4(r0)          witness, distance 4 so the read is clean
+// 9: sw  r5, 4(r0)          case 1 witness, distance 4 so the read is clean
 AC050004
 // 10: nop
 00000000
 // 11: nop
+00000000
+// --- case 2: the load's destination is r0 ----------------------------------
+// 12: lw  r0, 0(r0)         legal and pointless: the write is discarded
+8C000000
+// 13: ori r6, r0, 0x0033    really does read rs, and rs really is the load's
+//                           destination -- but that destination is r0, so
+//                           there is nothing to wait for. Must not stall.
+34060033
+// 14: nop
+00000000
+// 15: nop
+00000000
+// 16: nop
+00000000
+// 17: sw  r6, 8(r0)         case 2 witness, distance 4 so the read is clean
+AC060008
+// 18: nop
+00000000
+// 19: nop
 00000000

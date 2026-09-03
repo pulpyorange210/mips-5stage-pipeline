@@ -266,19 +266,24 @@ module tb_processor;
                     expect_count(stall_cycles, 0, "stall cycles (no lw in this program)");
                 end
 
-                // false_stall -- the interlock must NOT fire. A lw at index 4
-                // is followed by ori r5, r0, 0x77, whose rt is the destination
-                // rather than a source, so there is no dependency to wait for.
+                // false_stall -- the interlock must NOT fire, in two shapes.
+                // Index 5 is a consumer whose rt is a destination, which the
+                // read mask covers. Index 13 genuinely reads rs, and rs really
+                // is the load's destination, but that destination is r0, so
+                // nothing is written and the id_ex_rt != 0 guard covers it.
                 //
                 // The stall count is the whole test. Every architectural value
-                // below is identical with and without the spurious stall, which
-                // is exactly why end-state checking alone cannot catch this.
+                // below is identical with and without the spurious stalls,
+                // which is exactly why end-state checking cannot catch this.
                 PROG_FALSE_STALL: begin
+                    expect_reg(5'd0, 32'h00000000, "lw r0 wrote nothing");
                     expect_reg(5'd4, 32'h00000014, "positive control: a real lw executed");
                     expect_reg(5'd5, 32'h00000077, "ori won the WAW; same either way");
-                    expect_dmem(4,   32'h00000077, "r5 sunk to dmem word 4");
+                    expect_reg(5'd6, 32'h00000033, "r0 | 0x33");
+                    expect_dmem(4,   32'h00000077, "case 1 witness: r5 sunk to dmem word 4");
+                    expect_dmem(8,   32'h00000033, "case 2 witness: r6 sunk to dmem word 8");
                     expect_dmem(0,   32'h00000014, "dmem word 0 untouched by the loads");
-                    expect_count(stall_cycles, 0, "EVIDENCE: stall cycles must be 0, rt here is a destination");
+                    expect_count(stall_cycles, 0, "EVIDENCE: stall cycles must be 0 (read mask + rt != 0 guard)");
                 end
 
                 default: begin
