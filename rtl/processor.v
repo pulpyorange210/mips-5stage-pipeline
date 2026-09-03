@@ -15,7 +15,13 @@ module processor (
     assign pc_plus4 = pc + 32'd4;
 
     // IF/ID PIPELINE REGISTER OUTPUTS
+    // Only bits [31:28] are read, by the jump target below. That is the J-type
+    // rule: the target inherits the top 4 bits of PC+4 and takes the other 28
+    // from the instruction. The lower bits are carried but never consumed --
+    // they would be needed by a branch adder, and there are no branches here.
+    /* verilator lint_off UNUSEDSIGNAL */
     wire [31:0] if_id_pc_plus4;
+    /* verilator lint_on UNUSEDSIGNAL */
     wire [31:0] if_id_instr;
 
     // Decode fields from IF/ID instruction
@@ -49,7 +55,7 @@ module processor (
     wire        id_ex_reg_dst, id_ex_alu_src, id_ex_mem_to_reg;
     wire        id_ex_reg_write, id_ex_mem_read, id_ex_mem_write;
     wire [1:0]  id_ex_alu_op;
-    wire [31:0] id_ex_pc_plus4, id_ex_rs_data, id_ex_rt_data, id_ex_sign_ext_imm;
+    wire [31:0] id_ex_rs_data, id_ex_rt_data, id_ex_sign_ext_imm;
     wire [4:0]  id_ex_rs_addr, id_ex_rt_addr, id_ex_rd_addr;
 
     // EX STAGE WIRES
@@ -58,7 +64,6 @@ module processor (
     wire [31:0] alu_input_b_pre;   // after ForwardRt mux
     wire [31:0] alu_input_b;       // after ALUSrc mux
     wire [31:0] alu_result;
-    wire        alu_zero;
     wire [1:0]  forward_rs, forward_rt;
 
     // EX/MEM pipeline register outputs (needed for forwarding)
@@ -173,7 +178,6 @@ module processor (
         .MemWrite_in      (ctrl_mem_write),
         .ALUOp_in         (ctrl_alu_op),
         // Data in
-        .pc_plus4_in      (if_id_pc_plus4),
         .rs_data_in       (rs_data_id),
         .rt_data_in       (rt_data_id),
         .sign_ext_imm_in  (sign_ext_imm),
@@ -189,7 +193,6 @@ module processor (
         .MemWrite_out     (id_ex_mem_write),
         .ALUOp_out        (id_ex_alu_op),
         // Data out
-        .pc_plus4_out     (id_ex_pc_plus4),
         .rs_data_out      (id_ex_rs_data),
         .rt_data_out      (id_ex_rt_data),
         .sign_ext_imm_out (id_ex_sign_ext_imm),
@@ -229,8 +232,7 @@ module processor (
         .a        (alu_input_a),
         .b        (alu_input_b),
         .alu_ctrl (id_ex_alu_op),
-        .result   (alu_result),
-        .zero     (alu_zero)
+        .result   (alu_result)
     );
 
     // RegDst MUX: select write-back destination register

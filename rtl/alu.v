@@ -2,10 +2,8 @@ module alu (
     input  wire [31:0] a,
     input  wire [31:0] b,
     input  wire [1:0]  alu_ctrl,
-    output reg  [31:0] result,
-    output wire        zero
+    output reg  [31:0] result
 );
-    assign zero = (result == 32'd0);
 
     always @(*) begin
         case (alu_ctrl)
