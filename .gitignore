@@ -3,3 +3,4 @@
 *.vcd
 *.out
 Claude Setup.exe
+build/

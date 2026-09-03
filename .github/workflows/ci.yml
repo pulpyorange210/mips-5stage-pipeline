@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y iverilog verilator
+
+      - name: Tool versions
+        run: |
+          iverilog -V | head -1
+          verilator --version
+
+      # Lint runs first: a syntax or structural problem should fail here with a
+      # pointed message rather than as a confusing simulation failure.
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
+
+      # Logs and waves for a failed run, so a red build can be diagnosed without
+      # reproducing it locally.
+      - name: Upload simulation logs and waves
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-output
+          path: |
+            build/*.log
+            build/*.vcd
+          if-no-files-found: ignore
