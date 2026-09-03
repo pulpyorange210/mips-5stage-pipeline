@@ -36,7 +36,8 @@ module tb_processor;
     localparam PROG_RAW_DIST3  = 3;
     localparam PROG_LOAD_USE   = 4;
     localparam PROG_R0_WRITE   = 5;
-    localparam PROG_JUMP_FLUSH = 6;
+    localparam PROG_JUMP_FLUSH  = 6;
+    localparam PROG_FALSE_STALL = 7;
 
     localparam ROM_WORDS = 64;
 
@@ -263,6 +264,21 @@ module tb_processor;
                     expect_dmem(0,    32'h00000000, "r12 stored to dmem word 0, was 0x14 at reset");
                     expect_count(flush_cycles, 1, "flush cycles (jump_taken high exactly once)");
                     expect_count(stall_cycles, 0, "stall cycles (no lw in this program)");
+                end
+
+                // false_stall -- the interlock must NOT fire. A lw at index 4
+                // is followed by ori r5, r0, 0x77, whose rt is the destination
+                // rather than a source, so there is no dependency to wait for.
+                //
+                // The stall count is the whole test. Every architectural value
+                // below is identical with and without the spurious stall, which
+                // is exactly why end-state checking alone cannot catch this.
+                PROG_FALSE_STALL: begin
+                    expect_reg(5'd4, 32'h00000014, "positive control: a real lw executed");
+                    expect_reg(5'd5, 32'h00000077, "ori won the WAW; same either way");
+                    expect_dmem(4,   32'h00000077, "r5 sunk to dmem word 4");
+                    expect_dmem(0,   32'h00000014, "dmem word 0 untouched by the loads");
+                    expect_count(stall_cycles, 0, "EVIDENCE: stall cycles must be 0, rt here is a destination");
                 end
 
                 default: begin

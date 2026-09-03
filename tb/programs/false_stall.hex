@@ -1,0 +1,90 @@
+// false_stall.hex
+//
+// HAZARD UNDER TEST
+//   The absence of a hazard. This program contains a lw immediately followed
+//   by an instruction that touches the loaded register but does NOT read it,
+//   so the interlock must not fire.
+//
+//   rs and rt are bit positions, instr[25:21] and instr[20:16]. Whether either
+//   is actually a source depends entirely on the opcode:
+//
+//       lw    rs = source (base)   rt = DESTINATION
+//       ori   rs = source          rt = DESTINATION
+//       sw    rs = source (base)   rt = source (store data)
+//       xor   rs = source          rt = source
+//       j     neither -- those bits are part of the 26-bit target
+//
+//   The interlock condition compares id_ex_rt against both if_id_rs and
+//   if_id_rt without asking whether the consumer reads them. At index 5,
+//   ori r5, r0, 0x0077 has rt = r5 as its DESTINATION, which collides with the
+//   register the load at index 4 is writing. The comparison matches, and the
+//   pipeline stalls a cycle waiting for a value nobody is going to read.
+//
+//   There is no data dependency here at all -- it is a WAW, and an in-order
+//   pipeline resolves that for free because WB is sequential. The load writes
+//   r5, then the ori overwrites it. Stalling changes nothing except the cost.
+//
+// WHY END-STATE CHECKING CANNOT SEE THIS
+//   A spurious stall is architecturally invisible. Every register and every
+//   memory word ends up exactly as it would without it -- a stall is
+//   conservative by construction, it only ever delays. Comparing final state
+//   against expected values, however carefully, cannot detect it. That is why
+//   the evidence for this test is the stall counter and not a register.
+//
+// EVIDENCE
+//   stalls == 0. The testbench counts cycles in which pc_write is low.
+//   This reads 1 before the read mask is added and 0 after; nothing else in
+//   the final state differs between the two.
+//
+// POSITIVE CONTROL
+//   r4 = 0x00000014, loaded at index 0 and never overwritten. Without it this
+//   program could pass on a core that never executed the loads at all, since
+//   r5's final value comes from the ori regardless of whether the load ran.
+//   r4 is the only thing proving a lw actually happened.
+//
+// INDEPENDENT WITNESS
+//   dmem word 4 = 0x00000077, the final r5 stored four instructions later so
+//   the read comes cleanly from the register file. dmem word 0 stays at its
+//   reset value 0x00000014, confirming neither load disturbed its source.
+//
+// CYCLE COUNT
+//   16 cycles for the last instruction to retire, and zero stall cycles.
+//     12 instructions
+//   +  4 cycles of pipeline fill
+//   +  0 stalls
+//   = 16
+//   Before the fix it takes 17: the one extra cycle is the bug, and it is the
+//   entire observable difference.
+//
+// EXPECTED FINAL STATE
+//   r4        = 0x00000014     positive control, a real load executed
+//   r5        = 0x00000077     ori wins the WAW; same before and after the fix
+//   dmem[4:7] = 0x00000077
+//   dmem[0:3] = 0x00000014     untouched
+//   stalls    = 0              <-- 1 before the read mask. THE EVIDENCE.
+//
+// 0: lw  r4, 0(r0)          genuine load, r4 is never overwritten
+8C040000
+// 1: nop
+00000000
+// 2: nop
+00000000
+// 3: nop
+00000000
+// 4: lw  r5, 0(r0)          loads r5
+8C050000
+// 5: ori r5, r0, 0x0077     rt = r5 is the DESTINATION, not a source.
+//                           No dependency on the load. Must not stall.
+34050077
+// 6: nop
+00000000
+// 7: nop
+00000000
+// 8: nop
+00000000
+// 9: sw  r5, 4(r0)          witness, distance 4 so the read is clean
+AC050004
+// 10: nop
+00000000
+// 11: nop
+00000000
