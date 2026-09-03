@@ -38,6 +38,7 @@ module tb_processor;
     localparam PROG_R0_WRITE   = 5;
     localparam PROG_JUMP_FLUSH  = 6;
     localparam PROG_FALSE_STALL = 7;
+    localparam PROG_ORI_ZEROEXT = 8;
 
     localparam ROM_WORDS = 64;
 
@@ -284,6 +285,20 @@ module tb_processor;
                     expect_dmem(8,   32'h00000033, "case 2 witness: r6 sunk to dmem word 8");
                     expect_dmem(0,   32'h00000014, "dmem word 0 untouched by the loads");
                     expect_count(stall_cycles, 0, "EVIDENCE: stall cycles must be 0 (read mask + rt != 0 guard)");
+                end
+
+                // ori_zeroext -- ori must zero-extend its immediate.
+                // The evidence immediate has bit 15 set, which is the only way
+                // the two extensions differ; with it clear this test would pass
+                // on broken RTL. r8 is an ori with bit 15 CLEAR, so it reads the
+                // same either way and isolates the fault to the extension.
+                PROG_ORI_ZEROEXT: begin
+                    expect_reg(5'd7, 32'h00008000, "EVIDENCE: ori must zero-extend 0x8000, not sign-extend to 0xFFFF8000");
+                    expect_reg(5'd8, 32'h00000044, "positive control: ori with bit 15 clear, same either way");
+                    expect_dmem(0,   32'h00008000, "r7 sunk to dmem word 0");
+                    expect_dmem(4,   32'h00000044, "r8 sunk to dmem word 4");
+                    expect_count(stall_cycles, 0, "stall cycles (no lw in this program)");
+                    expect_count(flush_cycles, 0, "flush cycles (no j in this program)");
                 end
 
                 default: begin

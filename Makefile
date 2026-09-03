@@ -37,7 +37,7 @@ VLTFLAGS := --lint-only -Wall -Wno-DECLFILENAME --top-module processor
 # Test programs. To add one: append the name here, give it a PROG_ID matching
 # the localparam in tb/tb_processor.v and a cycle budget, then drop
 # tb/programs/<name>.hex alongside.
-PROGRAMS := raw_dist1 raw_dist2 raw_dist3 load_use r0_write jump_flush false_stall
+PROGRAMS := raw_dist1 raw_dist2 raw_dist3 load_use r0_write jump_flush false_stall ori_zeroext
 
 PROGID_raw_dist1  := 1
 PROGID_raw_dist2  := 2
@@ -45,7 +45,8 @@ PROGID_raw_dist3  := 3
 PROGID_load_use   := 4
 PROGID_r0_write   := 5
 PROGID_jump_flush  := 6
-PROGID_false_stall := 7
+PROGID_false_stall  := 7
+PROGID_ori_zeroext  := 8
 
 # Cycle budgets. Each is comfortably past the point the last instruction
 # retires; the .hex headers carry the arithmetic for load_use and jump_flush.
@@ -55,7 +56,8 @@ CYCLES_raw_dist3  := 20
 CYCLES_load_use   := 20
 CYCLES_r0_write   := 20
 CYCLES_jump_flush  := 24
-CYCLES_false_stall := 32
+CYCLES_false_stall  := 32
+CYCLES_ori_zeroext  := 24
 
 # Which program `make wave` runs and opens.
 WAVE_PROGRAM ?= raw_dist3

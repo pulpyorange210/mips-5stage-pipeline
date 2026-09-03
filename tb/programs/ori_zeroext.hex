@@ -1,0 +1,91 @@
+// ori_zeroext.hex
+//
+// BUG UNDER TEST
+//   ori must zero-extend its immediate. MIPS splits the two cases by opcode
+//   class: the logical immediates (ori, andi, xori) zero-extend, while the
+//   arithmetic and memory immediates (addi, lw, sw) sign-extend. This core
+//   routes every immediate through sign_extend, so
+//
+//       ori r7, r0, 0x8000
+//
+//   produces 0xFFFF8000 instead of 0x00008000. That is a wrong architectural
+//   result for a legal instruction -- not a stall, not a timing cost, a wrong
+//   number in a register.
+//
+// WHY BIT 15 MUST BE SET -- THE WHOLE TEST DEPENDS ON IT
+//   Sign-extension and zero-extension differ ONLY in what fills bits [31:16],
+//   and that filler is a copy of bit 15. For any immediate with bit 15 clear
+//   the two are bit-for-bit identical, so a test using, say, 0x0044 passes
+//   just as happily on the broken core as the fixed one and proves nothing
+//   whatsoever.
+//
+//   The immediate here is 0x8000: bit 15 set, every other bit clear. That is
+//   the minimal value that distinguishes the two extensions, and it makes the
+//   failure maximally legible -- 0x00008000 against 0xFFFF8000, differing in
+//   exactly the sixteen bits under test.
+//
+//   Any future edit to this program must keep bit 15 of the evidence immediate
+//   set. Clearing it does not weaken the test, it silently disables it.
+//
+// EVIDENCE
+//   r7 = 0x00008000. Nothing after index 0 writes it.
+//
+// POSITIVE CONTROL
+//   r8 = 0x00000044, an ori with bit 15 CLEAR, deliberately chosen to be
+//   insensitive to this bug. It reads the same on broken and fixed RTL, so it
+//   isolates the failure: if r7 is wrong while r8 is right, the fault is the
+//   extension specifically, and not ori being broken generally, the ALU OR
+//   path, or a program that never ran.
+//
+// INDEPENDENT WITNESS
+//   dmem word 0 carries r7 and dmem word 4 carries r8, each stored eight
+//   instructions after the value is produced so the read comes cleanly from
+//   the register file. Reset leaves word 0 at 0x00000014, so 0x00008000 there
+//   proves the store executed and carried the extended value.
+//
+// CYCLE COUNT
+//   19 cycles for the last instruction to retire, zero stalls, zero flushes.
+//     15 instructions
+//   +  4 cycles of pipeline fill
+//   = 19
+//   No lw, so the interlock must never fire; no j, so nothing is flushed.
+//   Unchanged before and after the fix -- extension is pure combinational
+//   width, it costs no cycles either way.
+//
+// EXPECTED FINAL STATE
+//   r7        = 0x00008000     <-- 0xFFFF8000 while ori sign-extends. EVIDENCE.
+//   r8        = 0x00000044     positive control, identical either way
+//   dmem[0:3] = 0x00008000     <-- 0xFFFF8000 on the broken core
+//   dmem[4:7] = 0x00000044
+//   stalls    = 0
+//
+// 0: ori r7, r0, 0x8000     bit 15 SET. Must zero-extend to 0x00008000.
+34078000
+// 1: nop
+00000000
+// 2: nop
+00000000
+// 3: nop
+00000000
+// 4: ori r8, r0, 0x0044     bit 15 clear: same under either extension
+34080044
+// 5: nop
+00000000
+// 6: nop
+00000000
+// 7: nop
+00000000
+// 8: sw  r7, 0(r0)          evidence witness into dmem word 0
+AC070000
+// 9: nop
+00000000
+// 10: nop
+00000000
+// 11: nop
+00000000
+// 12: sw  r8, 4(r0)         control witness into dmem word 4
+AC080004
+// 13: nop
+00000000
+// 14: nop
+00000000
