@@ -1,0 +1,72 @@
+// load_use.hex
+//
+// HAZARD UNDER TEST
+//   Load-use interlock. A load is followed immediately by an instruction that
+//   reads the loaded register. Forwarding alone cannot fix this: the data does
+//   not exist until the load's MEM stage completes, which is the same cycle the
+//   consumer would need it in EX. The pipeline must stall one cycle.
+//
+//       cycle        1    2    3    4    5    6    7
+//       i0 lw        IF   ID   EX  MEM   WB
+//       i1 consumer       IF   ID   ID   EX  MEM   WB
+//       bubble                      EX  MEM
+//
+//   In cycle 3 the hazard unit sees id_ex_mem_read with id_ex_rt = r7 matching
+//   if_id_rs = r7, so it drops pc_write and if_id_write and injects a NOP into
+//   ID/EX. i1 sits in ID for cycle 4. By cycle 5 the load is in MEM/WB and
+//   ForwardRs = 10 supplies the loaded word.
+//
+//   Why the stall is load-bearing: without it, i1 would be in EX in cycle 4
+//   while the load sat in EX/MEM, so the forwarding unit would match on
+//   ex_mem_rd and drive ForwardRs = 01 -- handing over ex_mem_alu_result, which
+//   for a load is the *address*, not the data. r8 would come out 0x00000000
+//   rather than 0x00000014. The test therefore distinguishes a missing
+//   interlock from a working one, not merely a missing forward.
+//
+// CYCLE COUNT
+//   13 cycles for the last instruction to retire, and exactly 1 stall cycle.
+//     8 instructions
+//   + 4 cycles of pipeline fill (the first retires in cycle 5, not cycle 1)
+//   + 1 interlock stall
+//   = 13
+//   The run asserts stalls == 1 by counting cycles in which pc_write is low.
+//   That count is what makes the claim checkable rather than a comment. It also
+//   holds after the hazard unit gains its read mask: this is a genuine
+//   load-use, rs really is read, so a correct unit stalls here too.
+//
+// EVIDENCE
+//   r8. Nothing after index 1 writes it.
+//
+// POSITIVE CONTROL
+//   r7 = 0x00000014 proves the load itself executed and that data memory came
+//   out of reset holding 20 in word 0, which is where the expected value comes
+//   from. Without this a zero in r8 would be ambiguous.
+//
+// INDEPENDENT WITNESS
+//   dmem word 8, a different word from the one the load read, so the witness
+//   cannot be confused with the source data. Reset leaves it 0x00000000, so
+//   0x00000014 there is unambiguous proof the store ran with the right value.
+//
+// EXPECTED FINAL STATE
+//   r7          = 0x00000014
+//   r8          = 0x00000014   <-- 0x00000000 if the interlock never fires
+//   dmem[8:11]  = 0x00000014
+//   dmem[0:3]   = 0x00000014   unchanged, the load does not write
+//   stalls      = 1
+//
+// 0: lw  r7, 0(r0)          loads 0x14 from dmem word 0
+8C070000
+// 1: ori r8, r7, 0x0000     consumer, forces the one-cycle interlock
+34E80000
+// 2: nop
+00000000
+// 3: nop
+00000000
+// 4: nop
+00000000
+// 5: sw  r8, 8(r0)          witness into a different word
+AC080008
+// 6: nop
+00000000
+// 7: nop
+00000000

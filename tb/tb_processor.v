@@ -46,6 +46,16 @@ module tb_processor;
     integer cycle;
     integer i;
 
+    // Behavioural counters. These turn the timing claims in the .hex headers
+    // into assertions instead of comments, and they catch the failure modes
+    // end-state checking is blind to: a spurious stall costs cycles without
+    // changing any architectural result, and a forward that never happens can
+    // be masked by a value that was going to be right anyway.
+    integer stall_cycles;   // cycles with pc_write low: the interlock firing
+    integer flush_cycles;   // cycles with jump_taken high
+    integer fwd_rs_ex;      // cycles with ForwardRs = 01 (EX/MEM -> EX)
+    integer fwd_rs_mem;     // cycles with ForwardRs = 10 (MEM/WB -> EX)
+
     processor dut (
         .CLK   (CLK),
         .reset (reset)
@@ -64,8 +74,12 @@ module tb_processor;
     end
 
     initial begin
-        errors = 0;
-        cycle  = 0;
+        errors       = 0;
+        cycle        = 0;
+        stall_cycles = 0;
+        flush_cycles = 0;
+        fwd_rs_ex    = 0;
+        fwd_rs_mem   = 0;
     end
 
     initial begin
@@ -119,6 +133,35 @@ module tb_processor;
         end
     endtask
 
+    task expect_count;
+        input integer  actual;
+        input integer  expected;
+        input [511:0]  what;
+        begin
+            if (actual !== expected) begin
+                $display("MISMATCH %0s: expected %0d, got %0d", what, expected, actual);
+                errors = errors + 1;
+            end else begin
+                $display("ok       %0s = %0d", what, actual);
+            end
+        end
+    endtask
+
+    // For coverage-style claims where the exact count is an implementation
+    // detail but zero would mean the mechanism never ran.
+    task expect_at_least_one;
+        input integer  actual;
+        input [511:0]  what;
+        begin
+            if (actual < 1) begin
+                $display("MISMATCH %0s: never occurred, expected at least once", what);
+                errors = errors + 1;
+            end else begin
+                $display("ok       %0s occurred %0d time(s)", what, actual);
+            end
+        end
+    endtask
+
     task expect_dmem;
         input integer byte_addr;
         input [31:0]  expected;
@@ -165,6 +208,61 @@ module tb_processor;
                     expect_reg(5'd5, 32'h000000AB, "producer wrote r5");
                     expect_reg(5'd6, 32'h000000AB, "EVIDENCE: distance-3 read of r5 must see 0xAB, not stale 0");
                     expect_dmem(0,   32'h000000AB, "r6 sunk to dmem word 0");
+                    expect_count(stall_cycles, 0, "stall cycles (no lw in this program)");
+                end
+
+                // raw_dist1 -- EX->EX forwarding, ForwardRs = 01.
+                // Producer at index 0, consumer at index 1.
+                PROG_RAW_DIST1: begin
+                    expect_reg(5'd1, 32'h00000011, "producer wrote r1");
+                    expect_reg(5'd2, 32'h00000011, "EVIDENCE: distance-1 read of r1 must see 0x11, not stale 0");
+                    expect_dmem(0,   32'h00000011, "r2 sunk to dmem word 0");
+                    expect_at_least_one(fwd_rs_ex, "ForwardRs = 01 (EX/MEM -> EX)");
+                    expect_count(stall_cycles, 0, "stall cycles (no lw in this program)");
+                end
+
+                // raw_dist2 -- MEM->EX forwarding, ForwardRs = 10.
+                // Producer at index 0, consumer at index 2, NOP between them so
+                // the EX hazard cannot match and 10 is reached on its own path.
+                PROG_RAW_DIST2: begin
+                    expect_reg(5'd3, 32'h00000022, "producer wrote r3");
+                    expect_reg(5'd4, 32'h00000022, "EVIDENCE: distance-2 read of r3 must see 0x22, not stale 0");
+                    expect_dmem(0,   32'h00000022, "r4 sunk to dmem word 0");
+                    expect_at_least_one(fwd_rs_mem, "ForwardRs = 10 (MEM/WB -> EX)");
+                    expect_count(stall_cycles, 0, "stall cycles (no lw in this program)");
+                end
+
+                // load_use -- the one-cycle interlock.
+                // Without the stall the consumer would forward ex_mem_alu_result,
+                // which for a load is the address, and r8 would read 0.
+                PROG_LOAD_USE: begin
+                    expect_reg(5'd7, 32'h00000014, "lw loaded 0x14 from dmem word 0");
+                    expect_reg(5'd8, 32'h00000014, "EVIDENCE: consumer must see the loaded word, not the address");
+                    expect_dmem(8,   32'h00000014, "r8 sunk to dmem word 8");
+                    expect_dmem(0,   32'h00000014, "dmem word 0 untouched by the load");
+                    expect_count(stall_cycles, 1, "stall cycles (exactly one interlock)");
+                end
+
+                // r0_write -- writes to r0 discarded on all three paths:
+                // the write port, the forwarding unit's rd != 0 guard, and the
+                // ordering of the write-first bypass behind the r0 test.
+                PROG_R0_WRITE: begin
+                    expect_reg(5'd0,  32'h00000000, "r0 never written");
+                    expect_reg(5'd9,  32'h00000055, "EVIDENCE: distance-1 read of r0 (forwarding rd != 0 guard)");
+                    expect_reg(5'd10, 32'h00000066, "EVIDENCE: distance-3 read of r0 (write-first ordered behind r0 test)");
+                    expect_dmem(0,    32'h00000000, "r0 stored to dmem word 0, was 0x14 at reset");
+                    expect_count(stall_cycles, 0, "stall cycles (no lw in this program)");
+                end
+
+                // jump_flush -- the instruction after j is squashed.
+                PROG_JUMP_FLUSH: begin
+                    expect_reg(5'd11, 32'h000000C1, "reached the jump");
+                    expect_reg(5'd12, 32'h00000000, "EVIDENCE: index 4 was squashed, must not have written 0xBA");
+                    expect_reg(5'd13, 32'h000000D1, "landed on the jump target");
+                    expect_reg(5'd14, 32'h00000000, "index 5 was jumped over entirely");
+                    expect_dmem(0,    32'h00000000, "r12 stored to dmem word 0, was 0x14 at reset");
+                    expect_count(flush_cycles, 1, "flush cycles (jump_taken high exactly once)");
+                    expect_count(stall_cycles, 0, "stall cycles (no lw in this program)");
                 end
 
                 default: begin
@@ -193,6 +291,11 @@ module tb_processor;
         if (!reset) begin
             cycle = cycle + 1;
             check_invariants;
+
+            if (dut.pc_write   === 1'b0)  stall_cycles = stall_cycles + 1;
+            if (dut.jump_taken === 1'b1)  flush_cycles = flush_cycles + 1;
+            if (dut.forward_rs === 2'b01) fwd_rs_ex    = fwd_rs_ex + 1;
+            if (dut.forward_rs === 2'b10) fwd_rs_mem   = fwd_rs_mem + 1;
             if (cycle >= `RUN_CYCLES) begin
                 check_end_state;
                 report_and_finish;

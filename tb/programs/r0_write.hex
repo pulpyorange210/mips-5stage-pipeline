@@ -1,0 +1,68 @@
+// r0_write.hex
+//
+// HAZARD UNDER TEST
+//   Writes to r0 are discarded, and every path that could leak a write back
+//   onto a read of r0 stays shut. There are three such paths and this program
+//   exercises all three:
+//
+//     1. The write port itself. register_file guards on write_addr != 0, so
+//        the storage never changes. The r0_is_zero invariant also checks this
+//        on every cycle of every program.
+//
+//     2. The forwarding unit, at distance 1. Index 1 reads r0 in the cycle the
+//        discarded write sits in EX/MEM. forwarding_unit guards on
+//        ex_mem_rd != 5'd0; without that guard ForwardRs would go to 01 and
+//        hand 0x1234 to the ALU.
+//
+//     3. The write-first bypass, at distance 3. Index 3 reads r0 in the same
+//        cycle the discarded write is in WB. This is the interesting one: the
+//        bypass condition reg_write && write_addr == rs_addr is genuinely TRUE
+//        here, because both addresses are 0. Only the fact that the r0 test
+//        comes first in the conditional chain keeps the read at zero. Put the
+//        bypass ahead of the r0 test and this test fails while every other
+//        test still passes.
+//
+// EVIDENCE
+//   r9 and r10 carry the verdict, and they are independent: r9 fails if the
+//   forwarding guard is missing, r10 fails if the write-first bypass is ordered
+//   ahead of the r0 check. Each would read 0x1234 ORed into its immediate.
+//   Nothing after index 3 writes either register.
+//
+// POSITIVE CONTROL
+//   r9 = 0x55 and r10 = 0x66 are themselves the controls: a value of 0 in
+//   either would mean the instruction never ran, and the expected values are
+//   distinct from both 0 and the poisoned 0x1234 pattern, so a pass cannot be
+//   confused with a program that did nothing.
+//
+// INDEPENDENT WITNESS
+//   dmem word 0. Reset leaves it 0x00000014, and index 7 stores r0 there, so
+//   0x00000000 proves both that the store executed and that r0 read as zero
+//   through the store-data path.
+//
+// EXPECTED FINAL STATE
+//   r0        = 0x00000000     never written, also asserted every cycle
+//   r9        = 0x00000055     <-- 0x00001255 if the forwarding r0 guard fails
+//   r10       = 0x00000066     <-- 0x00001266 if write-first precedes the r0 test
+//   dmem[0:3] = 0x00000000
+//   stalls    = 0              no lw, so the interlock must never fire
+//
+// 0: ori r0, r0, 0x1234     attempted write to r0, must be discarded
+34001234
+// 1: ori r9, r0, 0x0055     distance-1 read of r0: tests the forwarding guard
+34090055
+// 2: nop
+00000000
+// 3: ori r10, r0, 0x0066    distance-3 read of r0: tests write-first ordering
+340A0066
+// 4: nop
+00000000
+// 5: nop
+00000000
+// 6: nop
+00000000
+// 7: sw  r0, 0(r0)          witness: word 0 must go from 0x14 to 0
+AC000000
+// 8: nop
+00000000
+// 9: nop
+00000000

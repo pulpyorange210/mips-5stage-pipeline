@@ -1,0 +1,83 @@
+// jump_flush.hex
+//
+// HAZARD UNDER TEST
+//   The instruction after a taken jump is squashed. This core has no delay
+//   slot: j is decoded in ID, and by then the next instruction has already been
+//   fetched, so IF/ID must be flushed or that instruction executes for free.
+//
+//       cycle       4    5    6
+//       i3 j             ID        <- jump_taken high, IF/ID flushed
+//       i4 victim   IF   IF        <- fetched, never reaches ID
+//       target                IF
+//
+//   jump_taken is combinational from the decoded opcode, so it is high for
+//   exactly the one cycle j occupies ID. At the edge ending that cycle the PC
+//   takes jump_target and IF/ID is cleared, so i4 -- already sitting in IF --
+//   is discarded before it can decode. ID/EX is flushed in the same edge.
+//
+//   jump_target is { pc_plus4[31:28], instr[25:0], 2'b00 }, so target word 6
+//   becomes byte address 24, which is index 6.
+//
+// CYCLE COUNT
+//   16 cycles for the last instruction to retire, and exactly 1 flush cycle.
+//     11 instructions actually execute (indices 0-3 and 6-12)
+//   +  4 cycles of pipeline fill
+//   +  1 squashed slot, the cycle the fetched-but-killed i4 cost
+//   = 16
+//   Index 4 is fetched and thrown away; index 5 is never fetched at all,
+//   because the jump lands past it. The run asserts flushes == 1 by counting
+//   cycles in which jump_taken is high, which makes the claim checkable and
+//   also catches a jump that fires twice or latches.
+//
+// EVIDENCE
+//   r12 must still be 0x00000000. Index 4 tries to set it to 0xBA and is the
+//   only instruction in the program that writes it, so any non-zero value
+//   means the squash failed. r14 is a second, weaker witness: index 5 would
+//   set it to 0xEE and is never fetched at all.
+//
+// POSITIVE CONTROL
+//   Two, bracketing the jump. r11 = 0xC1 proves execution reached the jump,
+//   and r13 = 0xD1 proves it landed on the intended target rather than
+//   wandering. Without both, r12 = 0 would be equally consistent with a core
+//   that stopped fetching entirely.
+//
+// INDEPENDENT WITNESS
+//   dmem word 0. Index 10 stores r12 there; reset leaves the word at
+//   0x00000014, so 0x00000000 proves the store ran and that r12 really was
+//   zero when read through the store-data path.
+//
+// EXPECTED FINAL STATE
+//   r11       = 0x000000C1     reached the jump
+//   r12       = 0x00000000     <-- 0x000000BA if the squash failed
+//   r13       = 0x000000D1     landed on the target
+//   r14       = 0x00000000     <-- 0x000000EE if the jump were not taken
+//   dmem[0:3] = 0x00000000
+//   stalls    = 0              no lw, so the interlock must never fire
+//   flushes   = 1
+//
+// 0: ori r11, r0, 0x00C1    positive control before the jump
+340B00C1
+// 1: nop
+00000000
+// 2: nop
+00000000
+// 3: j 6                    target word 6 -> byte address 24
+08000006
+// 4: ori r12, r0, 0x00BA    MUST BE SQUASHED: fetched, must never decode
+340C00BA
+// 5: ori r14, r0, 0x00EE    jumped over entirely, never fetched
+340E00EE
+// 6: ori r13, r0, 0x00D1    jump target: proves where we landed
+340D00D1
+// 7: nop
+00000000
+// 8: nop
+00000000
+// 9: nop
+00000000
+// 10: sw r12, 0(r0)         witness: word 0 must go from 0x14 to 0
+AC0C0000
+// 11: nop
+00000000
+// 12: nop
+00000000

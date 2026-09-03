@@ -1,0 +1,55 @@
+// raw_dist2.hex
+//
+// HAZARD UNDER TEST
+//   Distance-2 RAW, closed by MEM->EX forwarding (ForwardRs = 10).
+//   The producer is in MEM/WB in the same cycle the consumer is in EX:
+//
+//       cycle       1    2    3    4    5
+//       i0 producer IF   ID   EX  MEM   WB
+//       i1 nop           IF   ID   EX  MEM
+//       i2 consumer           IF   ID   EX   <- needs r3 in cycle 5
+//
+//   In cycle 5 the MEM/WB register holds i0 and mem_wb_rd is r3, so the
+//   forwarding unit drives ForwardRs = 10 and the EX stage takes
+//   wb_write_data. The NOP at index 1 is what makes this the MEM case rather
+//   than the EX case: it occupies EX/MEM in cycle 5 with RegWrite = 0, so the
+//   higher-priority EX hazard cannot match and 10 is reached on its own path.
+//
+//   The register file cannot help. i2 reads r3 in ID during cycle 4 while i0
+//   is still in MEM, one cycle before the write, so write-first forwarding
+//   does not apply. Without MEM forwarding r4 latches 0.
+//
+// EVIDENCE
+//   r4. Nothing after index 2 writes it. The run also asserts that
+//   ForwardRs = 10 was actually exercised, so passing by luck is ruled out.
+//
+// POSITIVE CONTROL
+//   r3 = 0x00000022 proves the producer ran.
+//
+// INDEPENDENT WITNESS
+//   dmem word 0, stored four instructions after the consumer so the read of r4
+//   comes cleanly from the register file. Reset leaves word 0 at 0x00000014,
+//   so 0x00000022 proves the store ran and carried the forwarded value.
+//
+// EXPECTED FINAL STATE
+//   r3        = 0x00000022
+//   r4        = 0x00000022     <-- 0x00000000 without MEM->EX forwarding
+//   dmem[0:3] = 0x00000022
+//   stalls    = 0              no lw, so the interlock must never fire
+//
+// 0: ori r3, r0, 0x0022     producer
+34030022
+// 1: nop                    keeps EX/MEM empty so this is the MEM case, not EX
+00000000
+// 2: ori r4, r3, 0x0000     consumer at distance 2, needs ForwardRs = 10
+34640000
+// 3: nop
+00000000
+// 4: nop
+00000000
+// 5: nop
+00000000
+// 6: sw  r4, 0(r0)          witness, distance 4 so the read is clean
+AC040000
+// 7: nop
+00000000
