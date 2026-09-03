@@ -31,14 +31,14 @@ cd mips-5stage-pipeline
 make check
 ```
 
-`make check` runs lint, the invariant selftest and all six test programs, and is
+`make check` runs lint, the invariant selftest and all seven test programs, and is
 the whole story — a clean clone reproduces the green CI run from that one
 command.
 
 | Target | What it does |
 |---|---|
 | `make lint` | `verilator --lint-only -Wall -Wno-DECLFILENAME`. Exits 0 with no warnings. |
-| `make test` | Builds and runs all six programs, greps each log for `TEST PASSED`. |
+| `make test` | Builds and runs all seven programs, greps each log for `TEST PASSED`. |
 | `make selftest` | Proves each continuous invariant actually fires. Excluded from `make test`. |
 | `make check` | `lint` + `selftest` + `test`. |
 | `make wave` | Runs one program and opens its VCD. `WAVE_VIEWER` and `WAVE_PROGRAM` are overridable. |
@@ -113,7 +113,7 @@ The only command-line suppression is `DECLFILENAME`, because the pipeline
 registers are named `IF_ID`/`ID_EX`/`EX_MEM`/`MEM_WB` in lowercase files.
 
 **2. Self-checking test programs**, one per hazard class, in `tb/programs/`.
-One testbench serves all six, parameterised at compile time over the hex path
+One testbench serves all seven, parameterised at compile time over the hex path
 and a program id selecting a block of hardcoded expected values.
 
 | Program | Proves |
@@ -124,6 +124,7 @@ and a program id selecting a block of hardcoded expected values.
 | `load_use.hex` | One-cycle load-use interlock |
 | `r0_write.hex` | Writes to `r0` discarded on all three paths |
 | `jump_flush.hex` | The instruction after `j` is squashed |
+| `false_stall.hex` | The interlock does **not** fire when there is no dependency |
 
 Each has a positive control proving it ran, so a zero in the evidence register
 cannot be confused with a program that never executed, and an independent
@@ -153,7 +154,7 @@ live code rather than a copy.
 
 ### Mutation testing
 
-Six passing tests say nothing about coverage. To find out whether the suite
+Seven passing tests say nothing about coverage. To find out whether the suite
 actually detects anything, each mechanism was broken in a scratch tree:
 
 ```
@@ -162,13 +163,23 @@ MEM->EX forwarding disabled    caught by: raw_dist2 load_use
 load-use interlock disabled    caught by: load_use
 forwarding r0 guard removed    caught by: r0_write
 write-first ahead of r0 test   caught by: r0_write
-IF/ID jump flush disabled      caught by: jump_flush
 write-first bypass removed     caught by: raw_dist3
+IF/ID jump flush disabled      caught by: jump_flush
+read mask removed              caught by: false_stall
+id_ex_rt != 0 guard removed    caught by: false_stall
 ```
 
-No mutation went undetected, and each was caught by the test written for it.
+No mutation goes undetected, and each is caught by the test written for it.
 MEM forwarding appearing twice is correct rather than sloppy — `load_use`
 depends on it to deliver the loaded word after the interlock resolves.
+
+**The harness checks that each mutation applied.** It diffs the RTL after
+mutating and refuses to report a result if nothing changed. This is not
+belt-and-braces: a substitution that silently fails to match produces a row
+identical to a mutation nothing caught. That happened — a pattern ending in
+`"&& "` did not match a line ending at `"&&"` before a newline, and the run
+invented a coverage gap that did not exist. The same failure could as easily
+hide a real one behind a green row.
 
 ### Behavioural counters
 
@@ -178,10 +189,16 @@ changes no register, so a suite that only compares final state cannot see it.
 
 The testbench therefore counts cycles where `pc_write` is low, where
 `jump_taken` is high, and where `ForwardRs` is `01` or `10`. `load_use` asserts
-exactly one stall, `jump_flush` exactly one flush, and **every program without a
-`lw` asserts zero stalls**. `raw_dist1` and `raw_dist2` additionally assert their
+exactly one stall, `jump_flush` exactly one flush, and **every other program
+asserts zero stalls** — including `false_stall`, which contains two loads and
+must still never stall. `raw_dist1` and `raw_dist2` additionally assert their
 forwarding path was genuinely exercised, so neither can pass on a value that
 happened to be right for another reason.
+
+This is not a hypothetical safety net. It is the only thing that caught
+[the spurious-stall bug](#4-spurious-load-use-stalls-c59c051): in that failing
+run every register and memory check passed, and the stall count was the single
+mismatch.
 
 That makes the timing claims in the program headers checkable rather than
 prose. `load_use` is 8 instructions + 4 cycles of pipeline fill + 1 stall = 13
@@ -282,21 +299,66 @@ would have caught it. Verilator never flagged it; only the two above appeared in
 `UNUSEDSIGNAL` output, and only those two were removed. A hand-written list of
 dead code is a hypothesis; the linter is the authority.
 
+### 4. Spurious load-use stalls (`c59c051`)
+
+The interlock compared `id_ex_rt` against `if_id_rs` and `if_id_rt` without
+asking whether the opcode reads them. `rs` and `rt` are only bit positions;
+whether either is a *source* is an opcode question. `lw` and `ori` use `rt` as
+their **destination**, and `j`'s `rs`/`rt` bits are part of the 26-bit target
+and not register numbers at all. So a load followed by an instruction that
+*writes* the loaded register — a WAW, which an in-order pipeline resolves for
+free — stalled a cycle waiting for a value nobody reads.
+
+**Why the existing tests missed it, and why this one is different.** A spurious
+stall is architecturally invisible. It delays and never corrupts, so every
+register and every memory word ends up exactly as it would without it. The
+entire six-program suite passed, and would keep passing, because end-state
+checking is structurally incapable of seeing this. Look at the failing run in
+`6e040ec`: `r4`, `r5`, `dmem[4]` and `dmem[0]` all pass, and the single
+mismatch is the stall counter.
+
+**How it was caught.** `false_stall.hex`, written first and committed red at
+`6e040ec`, asserting zero stalls against the counter added in `fd35c24`.
+
+**The fix.** `ReadsRs`/`ReadsRt` decoded in `control_unit` and routed to the
+hazard unit, plus an `id_ex_rt != 0` guard:
+
+```verilog
+if (id_ex_mem_read && (id_ex_rt != 5'd0) &&
+    ((if_id_reads_rs && (id_ex_rt == if_id_rs)) ||
+     (if_id_reads_rt && (id_ex_rt == if_id_rt))))
+```
+
+**Why the decode lives in `control_unit`.** Giving the hazard unit its own
+opcode input and letting it decode for itself keeps the hazard logic
+self-contained, which has some appeal. It was rejected because it creates a
+second decoder over the same instruction set — add a sixth instruction, update
+one table, and the pipeline stalls correctly while the datapath does something
+else. Nothing catches that. In `control_unit` the read mask is set by the same
+`case` arms that set `RegDst` and `ALUSrc`, so getting it wrong is the same
+visible mistake as getting `ALUSrc` wrong.
+
+**Why both guards.** They cover different cases and neither substitutes for the
+other. The read mask does not cover a load into `r0`: a consumer reading `r0`
+really does read `rs`, and `rs` really does equal the load's destination, both
+being zero, so the masked comparison is still true — but the write was
+discarded, so there is nothing to wait for. `false_stall.hex` carries one case
+for each, added at `fa631e0` after mutation testing showed the zero guard was
+uncovered.
+
+**Proof:** `false_stall` went `TEST FAILED` → `TEST PASSED` across `c59c051`
+with every other stall and flush count unchanged — `load_use` still stalls
+exactly once, `jump_flush` still flushes once, the other five still stall zero
+times. Both guards are independently mutation-covered.
+
 ### Not yet fixed
 
-Two known bugs are still open and are honestly still bugs, not design choices:
+One known bug is still open, and it is a bug rather than a design choice:
 
 - **`ori` sign-extends its immediate.** `ALUSrc` routes it through
   `sign_extend`, but MIPS `ori` zero-extends. `ori rX, r0, 0x8000` yields
   `0xFFFF8000`. Every test program keeps its immediates below `0x8000` so this
   cannot mask a hazard under test.
-- **The hazard unit stalls without a read mask.** It fires whenever `id_ex_rt`
-  matches, without checking whether the consumer actually reads that register or
-  guarding `id_ex_rt != 0`. `j` reads neither source and `ori` reads only `rs`,
-  so some matches cost a cycle for nothing. Conservative — a spurious stall
-  delays but never corrupts — so it costs performance, not correctness. The
-  zero-stall assertions across the five non-`lw` programs already encode the
-  correct post-fix behaviour.
 
 ---
 

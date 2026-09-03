@@ -82,7 +82,10 @@ register: the data does not exist until the load's MEM stage finishes, which is
 the same cycle the consumer needs it in EX. One stall cycle is required.
 
 ```
-stall  if  id_ex_mem_read and (id_ex_rt == if_id_rs or id_ex_rt == if_id_rt)
+stall  if  id_ex_mem_read
+       and id_ex_rt != 0
+       and ( (reads_rs and id_ex_rt == if_id_rs)
+          or (reads_rt and id_ex_rt == if_id_rt) )
   -> pc_write = 0, if_id_write = 0, id_ex_flush = 1
 ```
 
@@ -97,11 +100,34 @@ consumer reaches EX while the load is in EX/MEM, so forwarding matches on
 why `load_use.hex` checks the loaded value rather than just that the program
 completed.
 
-**Known deviation:** the condition above stalls whenever `id_ex_rt` matches,
-without checking whether the consumer actually reads that register or guarding
-`id_ex_rt != 0`. `j` reads neither source and `ori` reads only `rs`, so some
-matches cost a cycle for nothing. This is conservative — a spurious stall
-delays but never corrupts — so it costs performance, not correctness. Pending.
+Both guards on that condition are load-bearing, and they cover different cases.
+
+**The read mask.** `rs` and `rt` are only bit positions, `instr[25:21]` and
+`instr[20:16]`. Whether either is a *source* is an opcode question:
+
+| | `rs` | `rt` |
+|---|---|---|
+| `lw`  | source (base) | **destination** |
+| `ori` | source | **destination** |
+| `sw`  | source (base) | source (store data) |
+| `xor` | source | source |
+| `j`   | – | – (part of the 26-bit target) |
+
+Comparing the fields alone stalls whenever a consumer happens to *write* the
+register a load is writing — a WAW, which an in-order pipeline resolves for
+free because WB is sequential. `ReadsRs`/`ReadsRt` are decoded in
+`control_unit`, by the same `case` arms that set the datapath control, so the
+opcode list exists in one place and the two cannot drift apart. An unrecognised
+R-type reads nothing, which covers `32'h00000000` — the NOP injected on a flush.
+
+**The `id_ex_rt != 0` guard.** A load into `r0` writes nothing, because the
+register file discards writes to `r0`. Nothing can depend on a value that is
+never stored. The read mask does not cover this: a consumer reading `r0` really
+does read `rs`, and `rs` really does equal the load's destination — both are
+zero — so the masked comparison is still true. Only the zero guard closes it.
+
+Neither guard substitutes for the other, and `false_stall.hex` contains one
+case for each.
 
 ### Jump and flush
 
