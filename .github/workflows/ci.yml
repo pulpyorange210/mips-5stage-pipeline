@@ -8,14 +8,23 @@ on:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest. Lint results depend on the Verilator version:
+    # 24.04 carries 5.020, and warning names have come and gone across 5.x --
+    # UNUSEDLOOP, for one, did not exist until 5.028. Letting the image float
+    # means the lint gate silently changes shape under us.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
+      # Versions pinned for the same reason. If a step fails because the
+      # archive moved on, bump the version here -- do not drop the pin. A
+      # loud failure that names the new version is the point.
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y iverilog verilator
+          sudo apt-get install -y \
+            iverilog=12.0-2build2 \
+            verilator=5.020-1
 
       - name: Tool versions
         run: |
